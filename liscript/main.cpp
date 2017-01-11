@@ -176,6 +176,8 @@ MAKE_EXCEPTION(undefined_error, "undefined error");
 
 struct s_object;
 struct s_string;
+struct s_function;
+struct s_array;
 
 template <typename T>
 using gc_vector = std::vector<T, traceable_allocator<T>>;
@@ -314,6 +316,8 @@ inline bool pstr_equal::operator()(const s_string* str1, const s_string* str2) c
 	return strcmp(str1->ptr, str2->ptr) == 0;
 }
 
+using native_fn_t = variable (*)(variable this_var, s_array* arguments);
+
 struct s_function
 {
 	s_object _obj;
@@ -323,7 +327,7 @@ struct s_function
 	union
 	{
 		const expression* expr;
-		variable (*native_fn)();
+		native_fn_t native_fn;
 	};
 	std::shared_ptr<expression> expr_root;
 
@@ -347,6 +351,8 @@ expression empty_expr;
 s_object* global_object;
 variable this_var;
 variable prev_var;
+
+s_object* console_object;
 
 // Object, Function, String, Array prototype
 s_object* p_Object;
@@ -397,6 +403,9 @@ s_string* create_string(const std::string& str);
 
 s_function* allocate_function(const gc_vector<s_string*>& parameters, const expression& expr);
 s_function* create_function(const gc_vector<s_string*>& parameters, const expression& expr);
+
+s_function* allocate_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn);
+s_function* create_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn);
 
 s_array* allocate_array();
 s_array* create_array();
@@ -602,6 +611,7 @@ s_function* allocate_function(const gc_vector<s_string*>& parameters, const expr
 
 	obj->_obj.type = object_type::function;
 	obj->parameters = parameters;
+	obj->is_native = false;
 	obj->expr = &expr;
 	obj->expr_root = expr.root.lock();
 
@@ -615,7 +625,31 @@ s_function* allocate_function(const gc_vector<s_string*>& parameters, const expr
 s_function* create_function(const gc_vector<s_string*>& parameters, const expression& expr)
 {
 	s_function* obj = allocate_function(parameters, expr);
-	obj->_obj.proto = p_String;
+	obj->_obj.proto = p_Function;
+	return obj;
+}
+
+s_function* allocate_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn)
+{
+	s_function* obj = (s_function*)GC_MALLOC(sizeof(s_function));
+	new (obj) s_function();
+
+	obj->_obj.type = object_type::function;
+	obj->parameters = parameters;
+	obj->is_native = true;
+	obj->native_fn = native_fn;
+
+	GC_REGISTER_FINALIZER(obj, [](void* r_obj, void* cdata) {
+		delete (s_function*)r_obj;
+	}, nullptr, nullptr, nullptr);
+
+	return obj;
+}
+
+s_function* create_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn)
+{
+	s_function* obj = allocate_native_function(parameters, native_fn);
+	obj->_obj.proto = p_Function;
 	return obj;
 }
 
@@ -695,6 +729,20 @@ void init_scripting()
 	// predefined variables
 	this_var = variable::object(global_object);
 	prev_var = variable::undefined();
+
+	// console
+	native_fn_t console_log = [](variable this_var, s_array* arguments) {
+		for (variable var : arguments->vector)
+		{
+			print_var(std::cout, var);
+			std::cout << std::endl;
+		}
+		return variable::undefined();
+	};
+	console_object = create_object();
+	console_object->proto = create_object();
+	console_object->proto->vars[create_string("log")] = variable::object(create_native_function({ }, console_log)->obj());
+	global_object->vars[create_string("console")] = variable::object(console_object);
 }
 
 bool read_expr(std::istream& strm, expression& ret, const std::weak_ptr<expression>& root)
@@ -1088,7 +1136,7 @@ variable call_function(s_function* fn, variable new_this, s_array* arguments)
 	}
 	else
 	{
-		std::abort(); // TODO
+		ret = fn->native_fn(this_var, arguments);
 	}
 
 	stackframe.pop_back();
