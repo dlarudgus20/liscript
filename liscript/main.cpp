@@ -32,16 +32,17 @@
  *  4) list라면
  *   4a) empty list라면 undefined
  *   4b) 첫째 항목이 list keyword라면 정의된 동작대로
- *   4c) 둘째 항목이 function이라면 첫째 항목을 this로, 셋째 항목 이후를 argument로 하여 함수 호출
- *   4d) 전부 아니라면 ListEvaluateError 예외를 던짐
+ *   4d) 첫째 항목을 평가해서 object이고 둘째 항목이 atom이면 가능할 경우 멤버 함수 호출
+ *   4c) 둘째 항목을 평가해서 function이라면 첫째 항목을 this로, 셋째 항목 이후를 argument로 하여 함수 호출
+ *   4e) 전부 아니라면 ListEvaluateError 예외를 던짐
  *
- * this값은 초기에는 global입니다. 함수를 호출할 때 this값을 지정할 수 있습니다.
- * ex) (setf this asdf (object)) // global에 새 object를 asdf라는 이름으로 넣음
+ * this값은 초기에는 global입니다. 함수를 호출할 때 this값을 지정해야 합니다.
+ * ex) (setf this asdf (new object)) // global에 새 object를 asdf라는 이름으로 넣음
  *     (asdf (func ()
- *         (setf this qwer (object))) // asdf에 새 object를 qwer라는 이름으로 넣음
+ *         (setf this qwer (new object)))) // asdf에 새 object를 qwer라는 이름으로 넣음
  *
- * atom keyword: global this undefined null prev
- * list keyword: func setf getf setl getl do if while
+ * atom keyword: global this undefined null prev arguments
+ * list keyword: func new getf setf getl setl do if while
  *
  * conditional로 쓰이는 값이 true이거나 null이 아닌 object라면 참으로 취급됩니다.
  * conditional로 쓰이는 값이 false, null, undefined라면 거짓으로 취급됩니다.
@@ -64,24 +65,33 @@
  * null
  *  null 값입니다.
  *
+ * prev
+ *  do 또는 while에서 이전에 평가된 값입니다. 없다면 undefined입니다.
+ *
+ * arguments
+ *  호출부가 넘긴 함수 실인수입니다. 호출된 함수 내부가 아닌 경우 undefined입니다.
+ *
  * list keywords
  *
- * func: (func (/par1/, ...) [expr])
+ * func: (func (/par1/ ...) [expr])
  *  함수를 만듭니다.
  *
- * setf: (setf /object/ [name] [expr])
- *  object에 값을 넣습니다. object 항목이 생략됬다면 this에 넣습니다.
+ * new: (new [function] /arg1/ ...)
+ *  새 object를 만들고 생성자를 호출해 초기화합니다.
  *
  * getf: (getf /object/ [name])
  *  object에서 값을 가져옵니다. object 항목이 생략됬다면 this에서 가져옵니다.
  *
- * setl: (setl [name] [expr])
- *  지역 변수에 값을 넣습니다.
+ * setf: (setf /object/ [name] [expr])
+ *  object에 값을 넣습니다. object 항목이 생략됬다면 this에 넣습니다.
  *
  * getl: (getl [name])
  *  지역 변수에 값을 넣습니다.
  *
- * do: (do [expr1], /expr2/, ...)
+ * setl: (setl [name] [expr])
+ *  지역 변수에 값을 넣습니다.
+ *
+ * do: (do [expr1] /expr2/ ...)
  *  expr들을 순차적으로 평가합니다. do 구문의 값은 맨 마지막 expr의 값이 됩니다.
  *
  * if: (if [condition] [expr1] [expr2])
@@ -109,7 +119,6 @@
 #include <string>
 #include <vector>
 #include <list>
-#include <stack>
 #include <unordered_map>
 #include <memory>
 #include <utility>
@@ -119,11 +128,13 @@
 #include <cstdint>
 #include <cctype>
 #include <cstring>
+#include <cassert>
 
 #include <boost/iostreams/stream.hpp>
 #include <boost/iostreams/categories.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/functional/hash.hpp>
+#include <boost/optional.hpp>
 
 namespace io = boost::iostreams;
 
@@ -323,16 +334,25 @@ struct s_array
 {
 	s_object _obj;
 	gc_vector<variable> vector;
+
+	s_object* obj() { return &_obj; }
 };
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// undefined를 나타내는 expression입니다.
+// empty expression initialized as undefined by init_scripting()
 expression empty_expr;
 
 // predefined objects
 s_object* global_object;
 variable this_var;
+variable prev_var;
+
+// Object, Function, String, Array prototype
+s_object* p_Object;
+s_object* p_Function;
+s_object* p_String;
+s_object* p_Array;
 
 // Object, Function, String, Array constructor
 s_object* f_Object;
@@ -340,24 +360,26 @@ s_object* f_Function;
 s_object* f_String;
 s_object* f_Array;
 
+// some cached strings initialized by init_scripting()
+s_string* str_empty; // ""
+s_string* str_prototype; // "prototype"
+
 ////////////////////////////////////////////////////////////////////////////////
 
 /**
  * 지역변수가 들어있는 stackframe입니다.
- * local_vars는 함수 단위의 frame입니다.
- * local_vars 안의 blocks는 블록 단위의 frame입니다.
+ * frame_entry는 함수 단위의 frame입니다.
+ * frame_entry 안의 blocks는 블록 단위의 frame입니다.
  **/
 
-template <typename T>
-using list_stack = std::stack<T, std::list<T>>;
-
-struct local_vars
+struct frame_entry
 {
 	s_array* arguments;
-	list_stack<object_map> blocks;
+	variable this_var;
+	std::list<object_map> blocks;
 };
 
-list_stack<local_vars> stackframe;
+std::list<frame_entry> stackframe;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -394,6 +416,11 @@ struct eval_context;
 variable eval_expr(const expression& expr);
 
 bool to_conditional(variable var);
+
+boost::optional<object_map::iterator> find_member(s_object* obj, s_string* name);
+boost::optional<object_map::iterator> find_local(s_string* name);
+
+variable call_function(s_function* fn, variable new_this, s_array* arguments);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -537,7 +564,7 @@ s_object* allocate_object()
 s_object* create_object()
 {
 	s_object* obj = allocate_object();
-	obj->proto = f_Object->proto;
+	obj->proto = p_Object;
 	return obj;
 }
 
@@ -560,8 +587,11 @@ s_string* allocate_string(const std::string& str)
 
 s_string* create_string(const std::string& str)
 {
+	if (str.empty())
+		return str_empty;
+
 	s_string* obj = allocate_string(str);
-	obj->_obj.proto = f_String->proto;
+	obj->_obj.proto = p_String;
 	return obj;
 }
 
@@ -585,7 +615,7 @@ s_function* allocate_function(const gc_vector<s_string*>& parameters, const expr
 s_function* create_function(const gc_vector<s_string*>& parameters, const expression& expr)
 {
 	s_function* obj = allocate_function(parameters, expr);
-	obj->_obj.proto = f_Function->proto;
+	obj->_obj.proto = p_String;
 	return obj;
 }
 
@@ -606,7 +636,7 @@ s_array* allocate_array()
 s_array* create_array()
 {
 	s_array* obj = allocate_array();
-	obj->_obj.proto = f_Array->proto;
+	obj->_obj.proto = p_Array;
 	return obj;
 }
 
@@ -619,35 +649,52 @@ void init_scripting()
 
 	empty_expr.type = expr_type::list;
 
-	f_Object = allocate_function({ }, empty_expr)->obj();
-	f_Object->proto = allocate_object();
-	f_Object->proto->proto = nullptr;
+	// prototype objects
+	p_Object = allocate_object();
+	p_Object->proto = nullptr;
 
-	f_Function = allocate_function({ }, empty_expr)->obj();
-	f_Function->proto = allocate_object();
-	f_Function->proto->proto = f_Object->proto;
+	p_Function = allocate_object();
+	p_Function->proto = p_Object;
 
-	f_String = allocate_function({ }, empty_expr)->obj();
-	f_String->proto = allocate_object();
-	f_String->proto->proto = f_Object->proto;
+	p_String = allocate_object();
+	p_String->proto = p_Object;
 
-	f_Array = allocate_function({ }, empty_expr)->obj();
-	f_Array->proto = allocate_object();
-	f_Array->proto->proto = f_Object->proto;
+	p_Array = allocate_object();
+	p_Array->proto = p_Object;
 
-	s_string* tn = create_string("__typename__");
-	f_Object->proto->vars[tn] = variable::object(create_string("object")->obj());
-	f_Function->proto->vars[tn] = variable::object(create_string("function")->obj());
-	f_String->proto->vars[tn] = variable::object(create_string("string")->obj());
-	f_Array->proto->vars[tn] = variable::object(create_string("array")->obj());
+	// cached strings
+	str_empty = allocate_string("");
+	str_empty->_obj.proto = p_String;
 
+	s_string* str_object = create_string("object");
+	s_string* str_function = create_string("function");
+	s_string* str_string = create_string("string");
+	s_string* str_array = create_string("array");
+	str_prototype = create_string("prototype");
+
+	// constructor objects
+	f_Object = create_function({ }, empty_expr)->obj();
+	f_Object->vars[str_prototype] = variable::object(p_Object);
+
+	f_Function = create_function({ }, empty_expr)->obj();
+	f_Function->vars[str_prototype] = variable::object(p_Function);
+
+	f_String = create_function({ }, empty_expr)->obj();
+	f_String->vars[str_prototype] = variable::object(p_String);
+
+	f_Array = create_function({ }, empty_expr)->obj();
+	f_Array->vars[str_prototype] = variable::object(p_Array);
+
+	// register constructors into global object
 	global_object = create_object();
-	global_object->vars[create_string("Object")] = variable::object(f_Object);
-	global_object->vars[create_string("Function")] = variable::object(f_Function);
-	global_object->vars[create_string("String")] = variable::object(f_String);
-	global_object->vars[create_string("Array")] = variable::object(f_Array);
+	global_object->vars[str_object] = variable::object(f_Object);
+	global_object->vars[str_function] = variable::object(f_Function);
+	global_object->vars[str_string] = variable::object(f_String);
+	global_object->vars[str_array] = variable::object(f_Array);
 
+	// predefined variables
 	this_var = variable::object(global_object);
+	prev_var = variable::undefined();
 }
 
 bool read_expr(std::istream& strm, expression& ret, const std::weak_ptr<expression>& root)
@@ -808,13 +855,16 @@ variable eval_expr_keyword_global(eval_context& context);
 variable eval_expr_keyword_this(eval_context& context);
 variable eval_expr_keyword_undefined(eval_context& context);
 variable eval_expr_keyword_null(eval_context& context);
+variable eval_expr_keyword_prev(eval_context& context);
+variable eval_expr_keyword_arguments(eval_context& context);
 
 // list keywords
 variable eval_expr_keyword_func(const expression& expr, eval_context& context);
-variable eval_expr_keyword_setf(const expression& expr, eval_context& context);
+variable eval_expr_keyword_new(const expression& expr, eval_context& context);
 variable eval_expr_keyword_getf(const expression& expr, eval_context& context);
-variable eval_expr_keyword_setl(const expression& expr, eval_context& context);
+variable eval_expr_keyword_setf(const expression& expr, eval_context& context);
 variable eval_expr_keyword_getl(const expression& expr, eval_context& context);
+variable eval_expr_keyword_setl(const expression& expr, eval_context& context);
 variable eval_expr_keyword_do(const expression& expr, eval_context& context);
 variable eval_expr_keyword_if(const expression& expr, eval_context& context);
 variable eval_expr_keyword_while(const expression& expr, eval_context& context);
@@ -828,13 +878,16 @@ atom_keyword_map_t atom_keyword_map = {
 	{ "this",		eval_expr_keyword_this },
 	{ "undefined",	eval_expr_keyword_undefined },
 	{ "null",		eval_expr_keyword_null },
+	{ "prev",		eval_expr_keyword_prev },
+	{ "arguments",	eval_expr_keyword_arguments },
 };
 list_keyword_map_t list_keyword_map = {
 	{ "func",		eval_expr_keyword_func },
-	{ "setf",		eval_expr_keyword_setf },
+	{ "new",		eval_expr_keyword_new },
 	{ "getf",		eval_expr_keyword_getf },
-	{ "setl",		eval_expr_keyword_setl },
+	{ "setf",		eval_expr_keyword_setf },
 	{ "getl",		eval_expr_keyword_getl },
+	{ "setl",		eval_expr_keyword_setl },
 	{ "do",			eval_expr_keyword_do },
 	{ "if",			eval_expr_keyword_if },
 	{ "while",		eval_expr_keyword_while },
@@ -867,29 +920,23 @@ variable eval_expr(const expression& expr)
 		}
 		else
 		{
-			// (getf [expr])
+			// getl
 
-			if (this_var.type != var_type::object)
-				throw not_object_error();
-			s_object* obj = this_var.v_object;
-
-			if (obj == nullptr)
-				throw null_reference_error();
-
-			do
+			auto pit = find_local(expr.value);
+			if (pit)
 			{
-				auto it = obj->vars.find(expr.value);
-				if (it != obj->vars.end())
-					return it->second;
-
-				obj = obj->proto;
-			} while (obj != nullptr);
-
-			return variable::undefined();
+				return (*pit)->second;
+			}
+			else
+			{
+				return variable::undefined();
+			}
 		}
 	}
-	else //if (expr.type == expr_type::list)
+	else
 	{
+		assert(expr.type == expr_type::list);
+
 		if (expr.list.empty())
 			return variable::undefined();
 
@@ -904,51 +951,153 @@ variable eval_expr(const expression& expr)
 			}
 		}
 
-		// member function call
+		// function call
 
 		if (expr.list.size() <= 1)
 			throw invalid_func_call();
 
 		variable var = eval_expr(expr.list[0]);
+		s_function* f_fn = nullptr;
 
-		if (var.type != var_type::object)
-			throw not_object_error();
-		if (var.v_object == nullptr)
-			throw null_reference_error();
-		s_object* obj = var.v_object;
-
-		if (expr.list[1].type != expr_type::atom)
-			throw invalid_func_call();
-
-		variable fn = variable::undefined();
-		do
+		if (var.type == var_type::object && var.v_object != nullptr && expr.list[1].type == expr_type::atom)
 		{
-			auto it = obj->vars.find(expr.list[1].value);
-			if (it != obj->vars.end())
+			// try member function call
+			s_object* obj = var.v_object;
+
+			variable fn = variable::undefined();
+			do
 			{
-				fn = it->second;
-				break;
+				auto it = obj->vars.find(expr.list[1].value);
+				if (it != obj->vars.end())
+				{
+					fn = it->second;
+					break;
+				}
+				obj = obj->proto;
+			} while (obj != nullptr);
+
+			if (fn.type == var_type::object && fn.v_object->type == object_type::function)
+			{
+				f_fn = (s_function*)fn.v_object;
 			}
-			obj = obj->proto;
-		} while (obj != nullptr);
-
-		if (fn.type == var_type::undefined)
-			throw undefined_error();
-		if (fn.type != var_type::object)
-			throw not_function_error();
-		if (fn.v_object->type != object_type::function)
-			throw not_function_error();
-
-		s_function* f_fn = (s_function*)fn.v_object;
-		if (!f_fn->is_native)
-		{
-			std::abort(); // TODO
 		}
-		else
+
+		if (f_fn == nullptr)
 		{
-			std::abort(); // TODO
+			variable var2 = eval_expr(expr.list[1]);
+			if (var2.type == var_type::object && var2.v_object->type == object_type::function)
+			{
+				f_fn = (s_function*)var2.v_object;
+			}
+		}
+
+		if (f_fn == nullptr)
+		{
+			throw list_evaluate_error();
+		}
+
+		s_array* arguments = create_array();
+		for (auto it = expr.list.begin() + 2; it != expr.list.end(); ++it)
+		{
+			arguments->vector.push_back(eval_expr(*it));
+		}
+
+		return call_function(f_fn, var, arguments);
+	}
+}
+
+bool to_conditional(variable var)
+{
+	if ((var.type == var_type::boolean && var.v_boolean)
+		|| (var.type == var_type::object && var.v_object != nullptr))
+	{
+		return true;
+	}
+	else if ((var.type == var_type::boolean && !var.v_boolean)
+		|| (var.type == var_type::object && var.v_object == nullptr)
+		|| var.type == var_type::undefined)
+	{
+		return false;
+	}
+	else
+	{
+		throw invalid_conditional();
+	}
+}
+
+boost::optional<object_map::iterator> find_member(s_object* obj, s_string* name)
+{
+	do
+	{
+		auto it = obj->vars.find(name);
+		if (it != obj->vars.end())
+			return it;
+
+		obj = obj->proto;
+	} while (obj != nullptr);
+
+	return boost::optional<object_map::iterator>();
+}
+
+boost::optional<object_map::iterator> find_local(s_string* name)
+{
+	if (!stackframe.empty())
+	{
+		for (auto sit = stackframe.rbegin(); sit != stackframe.rend(); ++sit)
+		{
+			for (auto bit = sit->blocks.rbegin(); bit != sit->blocks.rend(); ++bit)
+			{
+				auto it = bit->find(name);
+				if (it != bit->end())
+				{
+					return it;
+				}
+			}
 		}
 	}
+
+	return find_member(global_object, name);
+}
+
+variable call_function(s_function* fn, variable new_this, s_array* arguments)
+{
+	frame_entry frame;
+	frame.arguments = arguments;
+
+	object_map locals;
+	for (std::size_t i = 0; i < fn->parameters.size(); ++i)
+	{
+		variable val;
+		if (i < frame.arguments->vector.size())
+			val = frame.arguments->vector[i];
+		else
+			val = variable::undefined();
+
+		locals.insert({ fn->parameters[i], val });
+	}
+	frame.blocks.push_back(std::move(locals));
+	frame.this_var = new_this;
+
+	stackframe.push_back(frame);
+	this_var = new_this;
+
+	variable ret;
+	if (!fn->is_native)
+	{
+		ret = eval_expr(*fn->expr);
+	}
+	else
+	{
+		std::abort(); // TODO
+	}
+
+	stackframe.pop_back();
+	if (!stackframe.empty())
+		this_var = stackframe.front().this_var;
+	else
+		this_var = variable::object(global_object);
+
+	return ret;
 }
 
 // atom keyword handler
@@ -971,6 +1120,19 @@ variable eval_expr_keyword_undefined(eval_context& context)
 variable eval_expr_keyword_null(eval_context& context)
 {
 	return variable::object(nullptr);
+}
+
+variable eval_expr_keyword_prev(eval_context& context)
+{
+	return prev_var;
+}
+
+variable eval_expr_keyword_arguments(eval_context& context)
+{
+	if (!stackframe.empty())
+		return variable::object(stackframe.front().arguments->obj());
+	else
+		return variable::undefined();
 }
 
 // list keyword handler
@@ -996,10 +1158,88 @@ variable eval_expr_keyword_func(const expression& expr, eval_context& context)
 	return variable::object(create_function(par, expr.list[2])->obj());
 }
 
+variable eval_expr_keyword_new(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() < 2)
+		throw invalid_keyword_list();
+
+	variable v_ctor = eval_expr(expr.list[1]);
+	if (v_ctor.type != var_type::object)
+		throw not_object_error();
+	if (v_ctor.v_object->type != object_type::function)
+		throw not_function_error();
+
+	s_function* ctor = (s_function*)v_ctor.v_object;
+
+	s_array* arguments = create_array();
+	for (auto it = expr.list.begin() + 2; it != expr.list.end(); ++it)
+	{
+		arguments->vector.push_back(eval_expr(*it));
+	}
+
+	s_object* obj = create_object();
+	auto pit = find_member(ctor->obj(), str_prototype);
+	if (pit)
+	{
+		if ((*pit)->second.type != var_type::object)
+			throw not_object_error();
+		obj->proto = (*pit)->second.v_object;
+	}
+
+	call_function(ctor, variable::object(obj), arguments);
+
+	return variable::object(obj);
+}
+
+variable eval_expr_keyword_getf(const expression& expr, eval_context& context)
+{
+	s_object* obj;
+	s_string* var_name;
+
+	if (expr.list.size() == 3)
+	{
+		variable tmp = eval_expr(expr.list[1]);
+		if (tmp.type != var_type::object)
+			throw not_object_error();
+		obj = tmp.v_object;
+
+		if (expr.list[2].type != expr_type::atom)
+			throw invalid_keyword_list();
+		var_name = expr.list[2].value;
+	}
+	else if (expr.list.size() == 2)
+	{
+		if (this_var.type != var_type::object)
+			throw not_object_error();
+		obj = this_var.v_object;
+
+		if (expr.list[1].type != expr_type::atom)
+			throw invalid_keyword_list();
+		var_name = expr.list[1].value;
+	}
+	else
+	{
+		throw invalid_keyword_list();
+	}
+
+	if (obj == nullptr)
+		throw null_reference_error();
+
+	auto pit = find_member(obj, var_name);
+	if (pit)
+	{
+		return (*pit)->second;
+	}
+	else
+	{
+		return variable::undefined();
+	}
+}
+
 variable eval_expr_keyword_setf(const expression& expr, eval_context& context)
 {
 	s_object* obj;
-	const expression* expr_name;
+	s_string* var_name;
 	const expression* expr_val;
 
 	if (expr.list.size() == 4)
@@ -1009,7 +1249,10 @@ variable eval_expr_keyword_setf(const expression& expr, eval_context& context)
 			throw not_object_error();
 		obj = tmp.v_object;
 
-		expr_name = &expr.list[2];
+		if (expr.list[2].type != expr_type::atom)
+			throw invalid_keyword_list();
+		var_name = expr.list[2].value;
+
 		expr_val = &expr.list[3];
 	}
 	else if (expr.list.size() == 3)
@@ -1018,7 +1261,10 @@ variable eval_expr_keyword_setf(const expression& expr, eval_context& context)
 			throw not_object_error();
 		obj = this_var.v_object;
 
-		expr_name = &expr.list[1];
+		if (expr.list[1].type != expr_type::atom)
+			throw invalid_keyword_list();
+		var_name = expr.list[1].value;
+
 		expr_val = &expr.list[2];
 	}
 	else
@@ -1026,119 +1272,20 @@ variable eval_expr_keyword_setf(const expression& expr, eval_context& context)
 		throw invalid_keyword_list();
 	}
 
-	s_string* name;
-
-	if (expr_name->type == expr_type::atom)
-	{
-		name = expr_name->value;
-	}
-	else
-	{
-		variable tmp = eval_expr(*expr_name);
-		if (tmp.type != var_type::object)
-			throw not_object_error();
-		if (tmp.v_object->type != object_type::string)
-			throw not_string_error();
-		name = (s_string*)tmp.v_object;
-	}
-
 	if (obj == nullptr)
 		throw null_reference_error();
 
 	variable val = eval_expr(*expr_val);
-	obj->vars[name] = val;
 
-	return val;
-}
-
-variable eval_expr_keyword_getf(const expression& expr, eval_context& context)
-{
-	s_object* obj;
-	const expression* expr_name;
-
-	if (expr.list.size() == 3)
+	auto pit = find_member(obj, var_name);
+	if (pit)
 	{
-		variable tmp = eval_expr(expr.list[1]);
-		if (tmp.type != var_type::object)
-			throw not_object_error();
-		obj = tmp.v_object;
-
-		expr_name = &expr.list[2];
-	}
-	else if (expr.list.size() == 2)
-	{
-		if (this_var.type != var_type::object)
-			throw not_object_error();
-		obj = this_var.v_object;
-
-		expr_name = &expr.list[1];
+		(*pit)->second = val;
 	}
 	else
 	{
-		throw invalid_keyword_list();
+		obj->vars.insert({ var_name, val });
 	}
-
-	s_string* name;
-
-	if (expr_name->type == expr_type::atom)
-	{
-		name = expr_name->value;
-	}
-	else
-	{
-		variable tmp = eval_expr(*expr_name);
-		if (tmp.type != var_type::object)
-			throw not_object_error();
-		if (tmp.v_object->type != object_type::string)
-			throw not_string_error();
-		name = (s_string*)tmp.v_object;
-	}
-
-	if (obj == nullptr)
-		throw null_reference_error();
-
-	do
-	{
-		auto it = obj->vars.find(name);
-		if (it != obj->vars.end())
-			return it->second;
-
-		obj = obj->proto;
-	} while (obj != nullptr);
-
-	return variable::undefined();
-}
-
-variable eval_expr_keyword_setl(const expression& expr, eval_context& context)
-{
-	if (expr.list.size() != 3)
-		throw invalid_keyword_list();
-
-	object_map *mp;
-
-	if (stackframe.empty())
-		mp = &global_object->vars;
-	else
-		mp = &stackframe.top().blocks.top();
-
-	s_string* name;
-
-	if (expr.list[1].type == expr_type::atom)
-	{
-		name = expr.list[1].value;
-	}
-	else
-	{
-		variable tmp = eval_expr(expr.list[1]);
-		if (tmp.type != var_type::object)
-			throw not_object_error();
-		if (tmp.v_object->type != object_type::string)
-			throw not_string_error();
-		name = (s_string*)tmp.v_object;
-	}
-
-	variable val = eval_expr(expr.list[2]);
-	(*mp)[name] = val;
 
 	return val;
 }
@@ -1148,34 +1295,54 @@ variable eval_expr_keyword_getl(const expression& expr, eval_context& context)
 	if (expr.list.size() != 2)
 		throw invalid_keyword_list();
 
-	object_map *mp;
+	s_string* var_name;
 
-	if (stackframe.empty())
-		mp = &global_object->vars;
-	else
-		mp = &stackframe.top().blocks.top();
+	if (expr.list[1].type != expr_type::atom)
+		throw invalid_keyword_list();
+	var_name = expr.list[1].value;
 
-	s_string* name;
-
-	if (expr.list[1].type == expr_type::atom)
+	auto pit = find_local(var_name);
+	if (pit)
 	{
-		name = expr.list[1].value;
+		return (*pit)->second;
 	}
 	else
 	{
-		variable tmp = eval_expr(expr.list[1]);
-		if (tmp.type != var_type::object)
-			throw not_object_error();
-		if (tmp.v_object->type != object_type::string)
-			throw not_string_error();
-		name = (s_string*)tmp.v_object;
-	}
-
-	auto it = mp->find(name);
-	if (it != mp->end())
-		return it->second;
-	else
 		return variable::undefined();
+	}
+}
+
+variable eval_expr_keyword_setl(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	s_string* var_name;
+
+	if (expr.list[1].type != expr_type::atom)
+		throw invalid_keyword_list();
+	var_name = expr.list[1].value;
+
+	variable val = eval_expr(expr.list[2]);
+
+	auto pit = find_local(var_name);
+	if (pit)
+	{
+		(*pit)->second = val;
+	}
+	else
+	{
+		object_map* mp;
+
+		if (stackframe.empty())
+			mp = &global_object->vars;
+		else
+			mp = &stackframe.front().blocks.front();
+
+		mp->insert({ var_name, val });
+	}
+
+	return val;
 }
 
 variable eval_expr_keyword_do(const expression& expr, eval_context& context)
@@ -1188,8 +1355,10 @@ variable eval_expr_keyword_do(const expression& expr, eval_context& context)
 	for (auto it = std::next(expr.list.cbegin()); it != expr.list.cend(); ++it)
 	{
 		ret = eval_expr(*it);
+		prev_var = ret;
 	}
 
+	prev_var = variable::undefined();
 	return ret;
 }
 
@@ -1219,28 +1388,11 @@ variable eval_expr_keyword_while(const expression& expr, eval_context& context)
 	while (to_conditional(eval_expr(expr.list[1])))
 	{
 		ret = eval_expr(expr.list[2]);
+		prev_var = ret;
 	}
 
+	prev_var = variable::undefined();
 	return ret;
-}
-
-bool to_conditional(variable var)
-{
-	if ((var.type == var_type::boolean && var.v_boolean)
-		|| (var.type == var_type::object && var.v_object != nullptr))
-	{
-		return true;
-	}
-	else if ((var.type == var_type::boolean && !var.v_boolean)
-		|| (var.type == var_type::object && var.v_object == nullptr)
-		|| var.type == var_type::undefined)
-	{
-		return false;
-	}
-	else
-	{
-		throw invalid_conditional();
-	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1259,8 +1411,10 @@ void print_var(std::ostream& strm, variable var, int indent /* = 0 */)
 	{
 		strm << "(undefined)";
 	}
-	else //if (var.type == var_type::object)
+	else
 	{
+		assert(var.type == var_type::object);
+
 		if (var.v_object == nullptr)
 		{
 			strm << "(null)";
@@ -1285,8 +1439,36 @@ void print_var(std::ostream& strm, variable var, int indent /* = 0 */)
 
 			strm << " ) (...))";
 		}
-		else //if (var.v_object->type == object_type::object)
+		else if (var.v_object->type == object_type::array)
 		{
+			s_array* ar = (s_array*)var.v_object;
+
+			if (ar->vector.empty())
+			{
+				strm << "[ ]";
+			}
+			else
+			{
+				std::string str_indent((indent + 1) * 2, ' ');
+				bool first = true;
+
+				for (variable var : ar->vector)
+				{
+					if (first)
+						strm << "[\n" << str_indent;
+					else
+						strm << ",\n" << str_indent;
+					first = false;
+
+					print_var(strm, var, indent + 1);
+				}
+				strm << '\n' << std::string(indent * 2, ' ') << ']';
+			}
+		}
+		else
+		{
+			assert(var.v_object->type == object_type::object);
+
 			if (var.v_object->vars.empty())
 			{
 				strm << "{ }";
@@ -1304,10 +1486,10 @@ void print_var(std::ostream& strm, variable var, int indent /* = 0 */)
 						strm << ",\n" << str_indent;
 					first = false;
 
-					strm << pr.first;
+					strm << pr.first->ptr;
 					print_var(strm, pr.second, indent + 1);
 				}
-				strm << '\n' << str_indent << '}';
+				strm << '\n' << std::string(indent * 2, ' ') << '}';
 			}
 		}
 	}
