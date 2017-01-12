@@ -23,12 +23,14 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /**
+ * A. language reference
+ *
  * liscript는 lisp의 문법을 따온 prototype-based 언어입니다.
  *
  * expression의 평가는 다음 규칙을 따릅니다.
  *  1) number와 string이라면 그대로 평가
  *  2) atom keyword라면 정의된 동작대로
- *  3) identifier라면 (getf this [identifier])
+ *  3) keyword가 아닌 atom이라면 (getl [atom])
  *  4) list라면
  *   4a) empty list라면 undefined
  *   4b) 첫째 항목이 list keyword라면 정의된 동작대로
@@ -37,12 +39,12 @@
  *   4e) 전부 아니라면 ListEvaluateError 예외를 던짐
  *
  * this값은 초기에는 global입니다. 함수를 호출할 때 this값을 지정해야 합니다.
- * ex) (setf this asdf (new object)) // global에 새 object를 asdf라는 이름으로 넣음
+ * ex) (setf this asdf (new Object)) // global에 새 object를 asdf라는 이름으로 넣음
  *     (asdf (func ()
- *         (setf this qwer (new object)))) // asdf에 새 object를 qwer라는 이름으로 넣음
+ *         (setf this qwer (new Object)))) // asdf에 새 object를 qwer라는 이름으로 넣음
  *
- * atom keyword: global this undefined null prev arguments
- * list keyword: func new getf setf getl setl do if while
+ * atom keyword: global this undefined null true false prev arguments ...
+ * list keyword: func new array getf setf getl setl geti seti deli do if while + - * / % & idiv imod | ^ and or not = /= < <= > >=
  *
  * conditional로 쓰이는 값이 true이거나 null이 아닌 object라면 참으로 취급됩니다.
  * conditional로 쓰이는 값이 false, null, undefined라면 거짓으로 취급됩니다.
@@ -71,25 +73,40 @@
  * arguments
  *  호출부가 넘긴 함수 실인수입니다. 호출된 함수 내부가 아닌 경우 undefined입니다.
  *
+ * ...
+ *  func 키워드에서 가변 인수를 나타냅니다.
+ *
  * list keywords
  *
- * func: (func (/par1/ ...) [expr])
- *  함수를 만듭니다.
+ * func: (func /name/ (/par1/ ... /.../) [expr])
+ *  함수를 만듭니다. name이 있을 경우 만든 함수를 지정한 atom에 setl하고, 생성자가 되기 위한 prototype을 생성합니다.
  *
  * new: (new [function] /arg1/ ...)
  *  새 object를 만들고 생성자를 호출해 초기화합니다.
  *
- * getf: (getf /object/ [name])
+ * array: (array /item1/ ...)
+ *  새 array를 만들고 지정된 항목으로 초기화합니다.
+ *
+ * getf: (getf /object/ [atom])
  *  object에서 값을 가져옵니다. object 항목이 생략됬다면 this에서 가져옵니다.
  *
- * setf: (setf /object/ [name] [expr])
+ * setf: (setf /object/ [atom] [expr])
  *  object에 값을 넣습니다. object 항목이 생략됬다면 this에 넣습니다.
  *
- * getl: (getl [name])
+ * getl: (getl [atom])
  *  지역 변수에 값을 넣습니다.
  *
- * setl: (setl [name] [expr])
+ * setl: (setl [atom] [expr])
  *  지역 변수에 값을 넣습니다.
+ *
+ * geti: (geti [object] [string])
+ *  object에서 지정된 이름의 field를 가져옵니다.
+ *
+ * seti: (seti [object] [string] [expr])
+ *  object의 지정된 이름의 field에 값을 넣습니다.
+ *
+ * deli: (deli [object] [string])
+ *  object에서 지정된 이름의 field를 삭제합니다.
  *
  * do: (do [expr1] /expr2/ ...)
  *  expr들을 순차적으로 평가합니다. do 구문의 값은 맨 마지막 expr의 값이 됩니다.
@@ -100,6 +117,90 @@
  *
  * while: (while [condition] [expr])
  *  condition이 참일 동인 expr를 반복 실행합니다. while 구문의 값은 마지막으로 평가된 값이 됩니다.
+ *
+ * +: (+ [expr1] /expr2/ ...)
+ *  expr들을 순차적으로 평가한 후 그 합을 계산합니다.
+ *
+ * -: (- [expr])
+ *  expr를 평가하고 부호를 반전시킵니다.
+ *
+ * -: (- [expr1] [expr2])
+ *  expr1의 평가값에서 expr2의 평가값을 뺍니다.
+ *
+ * *: (* [expr1] /expr2/ ...)
+ *  expr들을 순차적으로 평가한 후 그 곱을 계산합니다.
+ *
+ * /: (/ [expr1] [expr2])
+ *  expr1의 평가값에서 expr2의 평가값을 나누어 그 몫을 계산합니다.
+ *
+ * %: (/ [expr1] [expr2])
+ *  expr1의 평가값에서 expr2의 평가값을 나누어 그 나머지을 계산합니다.
+ *
+ * &: (& [expr1] [expr2])
+ *  expr1의 평가값과 expr2의 평가값의 bitwise AND를 계산합니다.
+ *
+ * |: (& [expr1] [expr2])
+ *  expr1의 평가값과 expr2의 평가값의 bitwise OR을 계산합니다.
+ *
+ * ^: (^ [expr1] [expr2])
+ *  expr1의 평가값과 expr2의 평가값의 bitwise XOR을 계산합니다.
+ *
+ * and: (and [expr1] /expr2/ ...)
+ *  expr들의 평가값의 logical AND를 계산합니다. short circuit가 적용됩니다.
+ *
+ * or: (and [expr1] /expr2/ ...)
+ *  expr들의 평가값의 logical OR을 계산합니다. short circuit가 적용됩니다.
+ *
+ * not: (and [expr])
+ *  expr의 평가값의 logical NOT을 계산합니다.
+ *
+ * =: (= [expr1] [expr2])
+ *  expr1의 평가값과 expr2의 평가값이 같은지 확인합니다.
+ *
+ * /=: (/= [expr1] [expr2])
+ *  expr1의 평가값과 expr2의 평가값이 다른지 확인합니다.
+ *
+ * <: (< [expr1] [expr2])
+ *  expr1의 평가값이 expr2의 평가값보다 작은지 확인합니다.
+ *
+ * <=: (<= [expr1] [expr2])
+ *  expr1의 평가값이 expr2의 평가값보다 작거나 같은지 확인합니다.
+ *
+ * >: (> [expr1] [expr2])
+ *  expr1의 평가값이 expr2의 평가값보다 큰지 확인합니다.
+ *
+ * >=: (>= [expr1] [expr2])
+ *  expr1의 평가값이 expr2의 평가값보다 크거나 같은지 확인합니다.
+ *
+ * B. built-in library reference
+ *
+ * class Array
+ *   배열을 나타내는 클래스입니다.
+ *   생성자로 직접 생성하는 대신 array 키워드를 사용해 생성해야 합니다.
+ *   ctor: func Array()
+ *     생성자입니다. 생성자로 직접 생성하는 대신 array 키워드를 사용해 생성해야 합니다.
+ *   func size()
+ *     배열의 크기를 가져옵니다.
+ *   func get(index: number)
+ *     index번째 항목을 가져옵니다.
+ *   func set(index: number, val)
+ *     index번째 항목에 값을 넣습니다.
+ *
+ * object replConfig
+ *   repl에 관련된 설정입니다.
+ *   field dumpExpr: boolean
+ *     expr 평가 전 구문 분석 결과를 출력할지 여부입니다. 기본값은 false입니다.
+ *
+ * object console
+ *   콘솔 입출력을 담당합니다.
+ *   func dump(...)
+ *     obj의 정보를 화면에 출력합니다.
+ *   func readLine() -> string
+ *     한 줄을 표준 입력에서 읽어들입니다.
+ *
+ * func parseFloat(str: string) -> number
+ *   문자열을 부동 소수점 숫자로 바꿉니다.
+ *
  **/
 
 // boehm-gc
@@ -128,6 +229,7 @@
 #include <cstdint>
 #include <cctype>
 #include <cstring>
+#include <cmath>
 #include <cassert>
 
 #include <boost/iostreams/stream.hpp>
@@ -137,6 +239,8 @@
 #include <boost/optional.hpp>
 
 namespace io = boost::iostreams;
+
+#include "conlib.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -159,11 +263,17 @@ MAKE_EXCEPTION(keyword_evaluate_error, "keyword evaluate error");
 MAKE_EXCEPTION(name_collison_error, "name collison error");
 
 MAKE_EXCEPTION(invalid_keyword_list, "invalid keyword list");
+MAKE_EXCEPTION(invalid_keyword_atom, "invalid keyword atom");
 MAKE_EXCEPTION(invalid_conditional, "invalid conditional");
 MAKE_EXCEPTION(invalid_func_call, "invalid function call");
+MAKE_EXCEPTION(invalid_arg_error, "invalid argument");
+MAKE_EXCEPTION(out_of_range_error, "out of range");
 MAKE_EXCEPTION(not_object_error, "variable is not a object");
 MAKE_EXCEPTION(not_string_error, "variable is not a string");
 MAKE_EXCEPTION(not_function_error, "variable is not a function");
+MAKE_EXCEPTION(not_array_error, "variable is not a array");
+MAKE_EXCEPTION(not_number_error, "variable is not a number");
+MAKE_EXCEPTION(not_integer_error, "number is not a integer");
 
 MAKE_EXCEPTION(null_reference_error, "null reference error");
 MAKE_EXCEPTION(undefined_error, "undefined error");
@@ -232,6 +342,15 @@ struct variable
 		std::uint64_t raw;
 	};
 
+	bool operator ==(variable rhs)
+	{
+		return (type == rhs.type && raw == rhs.raw);
+	}
+	bool operator !=(variable rhs)
+	{
+		return !(*this == rhs);
+	}
+
 	static variable boolean(bool b)
 	{
 		variable ret;
@@ -297,6 +416,9 @@ struct s_object
 	object_type type;
 	s_object* proto;
 	object_map vars;
+	s_string* name;
+
+	variable var() { return variable::object(this); }
 };
 
 struct s_string
@@ -306,6 +428,7 @@ struct s_string
 	size_t size;
 
 	s_object* obj() { return &_obj; }
+	variable var() { return variable::object(obj()); }
 };
 inline std::size_t pstr_hash::operator()(const s_string* str) const
 {
@@ -322,6 +445,7 @@ struct s_function
 {
 	s_object _obj;
 	gc_vector<s_string*> parameters;
+	bool is_variadic;
 
 	bool is_native;
 	union
@@ -332,6 +456,7 @@ struct s_function
 	std::shared_ptr<expression> expr_root;
 
 	s_object* obj() { return &_obj; }
+	variable var() { return variable::object(obj()); }
 };
 
 struct s_array
@@ -340,6 +465,7 @@ struct s_array
 	gc_vector<variable> vector;
 
 	s_object* obj() { return &_obj; }
+	variable var() { return variable::object(obj()); }
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -352,6 +478,7 @@ s_object* global_object;
 variable this_var;
 variable prev_var;
 
+s_object* replconfig_object;
 s_object* console_object;
 
 // Object, Function, String, Array prototype
@@ -369,6 +496,8 @@ s_object* f_Array;
 // some cached strings initialized by init_scripting()
 s_string* str_empty; // ""
 s_string* str_prototype; // "prototype"
+s_string* str_replconfig; // "replConfig"
+s_string* str_dumpexpr; // "dumpExpr"
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -392,7 +521,7 @@ std::list<frame_entry> stackframe;
 /**
  * object, string, function의 할당/생성 함수입니다.
  * allocate 함수는 GC 할당과 초기화만 합니다.
- * create 함수는 allocate를 호출한 후 proto 값을 연결합니다.
+ * create 함수는 allocate를 호출한 후 proto, name 값을 연결합니다.
  **/
 
 s_object* allocate_object();
@@ -401,11 +530,11 @@ s_object* create_object();
 s_string* allocate_string(const std::string& str);
 s_string* create_string(const std::string& str);
 
-s_function* allocate_function(const gc_vector<s_string*>& parameters, const expression& expr);
-s_function* create_function(const gc_vector<s_string*>& parameters, const expression& expr);
+s_function* allocate_function(const gc_vector<s_string*>& parameters, const expression& expr, bool is_variadic = false);
+s_function* create_function(const gc_vector<s_string*>& parameters, const expression& expr, bool is_variadic = false);
 
-s_function* allocate_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn);
-s_function* create_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn);
+s_function* allocate_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn, bool is_variadic = false);
+s_function* create_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn, bool is_variadic = false);
 
 s_array* allocate_array();
 s_array* create_array();
@@ -425,6 +554,7 @@ struct eval_context;
 variable eval_expr(const expression& expr);
 
 bool to_conditional(variable var);
+std::int64_t to_integer(double n);
 
 boost::optional<object_map::iterator> find_member(s_object* obj, s_string* name);
 boost::optional<object_map::iterator> find_local(s_string* name);
@@ -534,7 +664,16 @@ int main()
 					throw unexpected_character_error();
 				}
 
-				dump_expr(*expr);
+				try
+				{
+					auto it = replconfig_object->vars.find(str_dumpexpr);
+					if (it != replconfig_object->vars.end() && to_conditional(it->second))
+					{
+						conlib::setcolor_block scb(conlib::color::darkgreen);
+						dump_expr(*expr);
+					}
+				}
+				catch (invalid_conditional&) { }
 
 				variable var = eval_expr(*expr);
 
@@ -548,6 +687,7 @@ int main()
 		}
 		catch (std::runtime_error& ex)
 		{
+			conlib::setcolor_block scb(conlib::color::red);
 			std::cerr << ex.what() << std::endl;
 		}
 	}
@@ -574,6 +714,7 @@ s_object* create_object()
 {
 	s_object* obj = allocate_object();
 	obj->proto = p_Object;
+	obj->name = str_empty;
 	return obj;
 }
 
@@ -601,16 +742,18 @@ s_string* create_string(const std::string& str)
 
 	s_string* obj = allocate_string(str);
 	obj->_obj.proto = p_String;
+	obj->_obj.name = str_empty;
 	return obj;
 }
 
-s_function* allocate_function(const gc_vector<s_string*>& parameters, const expression& expr)
+s_function* allocate_function(const gc_vector<s_string*>& parameters, const expression& expr, bool is_variadic /* = false */)
 {
 	s_function* obj = (s_function*)GC_MALLOC(sizeof(s_function));
 	new (obj) s_function();
 
 	obj->_obj.type = object_type::function;
 	obj->parameters = parameters;
+	obj->is_variadic = is_variadic;
 	obj->is_native = false;
 	obj->expr = &expr;
 	obj->expr_root = expr.root.lock();
@@ -622,20 +765,22 @@ s_function* allocate_function(const gc_vector<s_string*>& parameters, const expr
 	return obj;
 }
 
-s_function* create_function(const gc_vector<s_string*>& parameters, const expression& expr)
+s_function* create_function(const gc_vector<s_string*>& parameters, const expression& expr, bool is_variadic /* = false */)
 {
-	s_function* obj = allocate_function(parameters, expr);
+	s_function* obj = allocate_function(parameters, expr, is_variadic);
 	obj->_obj.proto = p_Function;
+	obj->_obj.name = str_empty;
 	return obj;
 }
 
-s_function* allocate_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn)
+s_function* allocate_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn, bool is_variadic /* = false */)
 {
 	s_function* obj = (s_function*)GC_MALLOC(sizeof(s_function));
 	new (obj) s_function();
 
 	obj->_obj.type = object_type::function;
 	obj->parameters = parameters;
+	obj->is_variadic = is_variadic;
 	obj->is_native = true;
 	obj->native_fn = native_fn;
 
@@ -646,10 +791,11 @@ s_function* allocate_native_function(const gc_vector<s_string*>& parameters, nat
 	return obj;
 }
 
-s_function* create_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn)
+s_function* create_native_function(const gc_vector<s_string*>& parameters, native_fn_t native_fn, bool is_variadic /* = false */)
 {
-	s_function* obj = allocate_native_function(parameters, native_fn);
+	s_function* obj = allocate_native_function(parameters, native_fn, is_variadic);
 	obj->_obj.proto = p_Function;
+	obj->_obj.name = str_empty;
 	return obj;
 }
 
@@ -671,6 +817,7 @@ s_array* create_array()
 {
 	s_array* obj = allocate_array();
 	obj->_obj.proto = p_Array;
+	obj->_obj.name = str_empty;
 	return obj;
 }
 
@@ -700,11 +847,21 @@ void init_scripting()
 	str_empty = allocate_string("");
 	str_empty->_obj.proto = p_String;
 
-	s_string* str_object = create_string("object");
-	s_string* str_function = create_string("function");
-	s_string* str_string = create_string("string");
-	s_string* str_array = create_string("array");
+	s_string* str_object = create_string("Object");
+	s_string* str_function = create_string("Function");
+	s_string* str_string = create_string("String");
+	s_string* str_array = create_string("Array");
+	s_string* str_index = create_string("index");
+	s_string* str_val = create_string("val");
+	s_string* str_str = create_string("str");
 	str_prototype = create_string("prototype");
+	str_replconfig = create_string("replConfig");
+	str_dumpexpr = create_string("dumpExpr");
+
+	p_Object->name = str_object;
+	p_Function->name = str_function;
+	p_String->name = str_string;
+	p_Array->name = str_array;
 
 	// constructor objects
 	f_Object = create_function({ }, empty_expr)->obj();
@@ -719,6 +876,75 @@ void init_scripting()
 	f_Array = create_function({ }, empty_expr)->obj();
 	f_Array->vars[str_prototype] = variable::object(p_Array);
 
+	// array
+	native_fn_t array_size = [](variable this_var, s_array* arguments) {
+		if (this_var.type != var_type::object)
+			throw not_array_error();
+		if (this_var.v_object == nullptr)
+			throw null_reference_error();
+		if (this_var.v_object->type != object_type::array)
+			throw not_array_error();
+		s_array* arr = (s_array*)this_var.v_object;
+
+		if (arguments->vector.size() != 0)
+			throw invalid_arg_error();
+
+		return variable::number(arr->vector.size());
+	};
+	native_fn_t array_get = [](variable this_var, s_array* arguments) {
+		if (this_var.type != var_type::object)
+			throw not_array_error();
+		if (this_var.v_object == nullptr)
+			throw null_reference_error();
+		if (this_var.v_object->type != object_type::array)
+			throw not_array_error();
+		s_array* arr = (s_array*)this_var.v_object;
+
+		if (arguments->vector.size() != 1)
+			throw invalid_arg_error();
+		if (arguments->vector[0].type != var_type::number)
+			throw invalid_arg_error();
+		try
+		{
+			std::size_t idx = static_cast<std::size_t>(to_integer(arguments->vector[0].v_number));
+			if (idx >= arr->vector.size())
+				throw out_of_range_error();
+			return arr->vector[idx];
+		}
+		catch (not_integer_error&)
+		{
+			throw invalid_arg_error();
+		}
+	};
+	native_fn_t array_set = [](variable this_var, s_array* arguments) {
+		if (this_var.type != var_type::object)
+			throw not_array_error();
+		if (this_var.v_object == nullptr)
+			throw null_reference_error();
+		if (this_var.v_object->type != object_type::array)
+			throw not_array_error();
+		s_array* arr = (s_array*)this_var.v_object;
+
+		if (arguments->vector.size() != 2)
+			throw invalid_arg_error();
+		if (arguments->vector[0].type != var_type::number)
+			throw invalid_arg_error();
+		try
+		{
+			std::size_t idx = static_cast<std::size_t>(to_integer(arguments->vector[0].v_number));
+			if (idx >= arr->vector.size())
+				throw out_of_range_error();
+			return (arr->vector[idx] = arguments->vector[1]);
+		}
+		catch (not_integer_error&)
+		{
+			throw invalid_arg_error();
+		}
+	};
+	p_Array->vars[create_string("size")] = create_native_function({ }, array_size)->var();
+	p_Array->vars[create_string("get")] = create_native_function({ str_index }, array_get)->var();
+	p_Array->vars[create_string("set")] = create_native_function({ str_index, str_val }, array_set)->var();
+
 	// register constructors into global object
 	global_object = create_object();
 	global_object->vars[str_object] = variable::object(f_Object);
@@ -730,8 +956,13 @@ void init_scripting()
 	this_var = variable::object(global_object);
 	prev_var = variable::undefined();
 
+	// repl
+	replconfig_object = create_object();
+	replconfig_object->vars[str_dumpexpr] = variable::boolean(false);
+	global_object->vars[str_replconfig] = variable::object(replconfig_object);
+
 	// console
-	native_fn_t console_log = [](variable this_var, s_array* arguments) {
+	native_fn_t console_dump = [](variable this_var, s_array* arguments) {
 		for (variable var : arguments->vector)
 		{
 			print_var(std::cout, var);
@@ -739,10 +970,36 @@ void init_scripting()
 		}
 		return variable::undefined();
 	};
+	native_fn_t console_readline = [](variable this_var, s_array* arguments) {
+		std::string line;
+		getline(std::cin, line);
+		return create_string(line)->var();
+	};
 	console_object = create_object();
-	console_object->proto = create_object();
-	console_object->proto->vars[create_string("log")] = variable::object(create_native_function({ }, console_log)->obj());
+	console_object->vars[create_string("dump")] = create_native_function({ }, console_dump, true)->var();
+	console_object->vars[create_string("readLine")] = create_native_function({ }, console_readline)->var();
 	global_object->vars[create_string("console")] = variable::object(console_object);
+
+	// global functions
+	native_fn_t fn_parseFloat = [](variable this_var, s_array* arguments) {
+		if (arguments->vector.size() != 1)
+			throw invalid_arg_error();
+		if (arguments->vector[0].type != var_type::object)
+			throw invalid_arg_error();
+		if (arguments->vector[0].v_object == nullptr)
+			throw null_reference_error();
+		if (arguments->vector[0].v_object->type != object_type::string)
+			throw invalid_arg_error();
+		s_string* str = (s_string*)arguments->vector[0].v_object;
+
+		char* endptr;
+		double num = std::strtod(str->ptr, &endptr);
+		if (*endptr != '\0')
+			throw invalid_arg_error();
+
+		return variable::number(num);
+	};
+	global_object->vars[create_string("parseFloat")] = create_native_function({ str_str }, fn_parseFloat)->var();
 }
 
 bool read_expr(std::istream& strm, expression& ret, const std::weak_ptr<expression>& root)
@@ -903,19 +1160,44 @@ variable eval_expr_keyword_global(eval_context& context);
 variable eval_expr_keyword_this(eval_context& context);
 variable eval_expr_keyword_undefined(eval_context& context);
 variable eval_expr_keyword_null(eval_context& context);
+variable eval_expr_keyword_true(eval_context& context);
+variable eval_expr_keyword_false(eval_context& context);
 variable eval_expr_keyword_prev(eval_context& context);
 variable eval_expr_keyword_arguments(eval_context& context);
+variable eval_expr_keyword_dotdotdot_(eval_context& context);
 
 // list keywords
 variable eval_expr_keyword_func(const expression& expr, eval_context& context);
 variable eval_expr_keyword_new(const expression& expr, eval_context& context);
+variable eval_expr_keyword_array(const expression& expr, eval_context& context);
 variable eval_expr_keyword_getf(const expression& expr, eval_context& context);
 variable eval_expr_keyword_setf(const expression& expr, eval_context& context);
 variable eval_expr_keyword_getl(const expression& expr, eval_context& context);
 variable eval_expr_keyword_setl(const expression& expr, eval_context& context);
+variable eval_expr_keyword_geti(const expression& expr, eval_context& context);
+variable eval_expr_keyword_seti(const expression& expr, eval_context& context);
 variable eval_expr_keyword_do(const expression& expr, eval_context& context);
 variable eval_expr_keyword_if(const expression& expr, eval_context& context);
 variable eval_expr_keyword_while(const expression& expr, eval_context& context);
+variable eval_expr_keyword_plus_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_minus_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_multiply_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_division_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_modulo_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_idiv(const expression& expr, eval_context& context);
+variable eval_expr_keyword_imod(const expression& expr, eval_context& context);
+variable eval_expr_keyword_bitand_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_bitor_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_bitxor_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_and(const expression& expr, eval_context& context);
+variable eval_expr_keyword_or(const expression& expr, eval_context& context);
+variable eval_expr_keyword_not(const expression& expr, eval_context& context);
+variable eval_expr_keyword_eq_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_ne_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_lt_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_lte_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_gt_(const expression& expr, eval_context& context);
+variable eval_expr_keyword_gte_(const expression& expr, eval_context& context);
 
 using atom_keyword_map_t = std::unordered_map<
 	std::string, std::function<variable(eval_context& context)>>;
@@ -926,19 +1208,44 @@ atom_keyword_map_t atom_keyword_map = {
 	{ "this",		eval_expr_keyword_this },
 	{ "undefined",	eval_expr_keyword_undefined },
 	{ "null",		eval_expr_keyword_null },
+	{ "true",		eval_expr_keyword_true },
+	{ "false",		eval_expr_keyword_false },
 	{ "prev",		eval_expr_keyword_prev },
 	{ "arguments",	eval_expr_keyword_arguments },
+	{ "...",		eval_expr_keyword_dotdotdot_ },
 };
 list_keyword_map_t list_keyword_map = {
 	{ "func",		eval_expr_keyword_func },
 	{ "new",		eval_expr_keyword_new },
+	{ "array",		eval_expr_keyword_array },
 	{ "getf",		eval_expr_keyword_getf },
 	{ "setf",		eval_expr_keyword_setf },
 	{ "getl",		eval_expr_keyword_getl },
 	{ "setl",		eval_expr_keyword_setl },
+	{ "geti",		eval_expr_keyword_geti },
+	{ "seti",		eval_expr_keyword_seti },
 	{ "do",			eval_expr_keyword_do },
 	{ "if",			eval_expr_keyword_if },
 	{ "while",		eval_expr_keyword_while },
+	{ "+",			eval_expr_keyword_plus_ },
+	{ "-",			eval_expr_keyword_minus_ },
+	{ "*",			eval_expr_keyword_multiply_ },
+	{ "/",			eval_expr_keyword_division_ },
+	{ "%",			eval_expr_keyword_modulo_ },
+	{ "idiv",		eval_expr_keyword_idiv },
+	{ "imod",		eval_expr_keyword_imod },
+	{ "&",			eval_expr_keyword_bitand_ },
+	{ "|",			eval_expr_keyword_bitor_ },
+	{ "^",			eval_expr_keyword_bitxor_ },
+	{ "and",		eval_expr_keyword_and },
+	{ "or",			eval_expr_keyword_or },
+	{ "not",		eval_expr_keyword_not },
+	{ "=",			eval_expr_keyword_eq_ },
+	{ "/=",			eval_expr_keyword_ne_ },
+	{ "<",			eval_expr_keyword_lt_ },
+	{ "<=",			eval_expr_keyword_lte_ },
+	{ ">",			eval_expr_keyword_gt_ },
+	{ ">=",			eval_expr_keyword_gte_ },
 };
 
 bool is_keyword(const std::string &str)
@@ -1073,6 +1380,16 @@ bool to_conditional(variable var)
 	}
 }
 
+std::int64_t to_integer(double n)
+{
+	double intpart;
+	if (std::modf(n, &intpart) != 0.0)
+		throw not_integer_error();
+	if (intpart > INT64_MAX)
+		throw not_integer_error();
+	return static_cast<std::int64_t>(intpart);
+}
+
 boost::optional<object_map::iterator> find_member(s_object* obj, s_string* name)
 {
 	do
@@ -1109,6 +1426,9 @@ boost::optional<object_map::iterator> find_local(s_string* name)
 
 variable call_function(s_function* fn, variable new_this, s_array* arguments)
 {
+	if (fn->parameters.size() < arguments->vector.size() && !fn->is_variadic)
+		throw invalid_arg_error();
+
 	frame_entry frame;
 	frame.arguments = arguments;
 
@@ -1170,6 +1490,16 @@ variable eval_expr_keyword_null(eval_context& context)
 	return variable::object(nullptr);
 }
 
+variable eval_expr_keyword_true(eval_context & context)
+{
+	return variable::boolean(true);
+}
+
+variable eval_expr_keyword_false(eval_context & context)
+{
+	return variable::boolean(false);
+}
+
 variable eval_expr_keyword_prev(eval_context& context)
 {
 	return prev_var;
@@ -1183,27 +1513,93 @@ variable eval_expr_keyword_arguments(eval_context& context)
 		return variable::undefined();
 }
 
+variable eval_expr_keyword_dotdotdot_(eval_context& context)
+{
+	throw invalid_keyword_atom();
+}
+
 // list keyword handler
 
 variable eval_expr_keyword_func(const expression& expr, eval_context& context)
 {
-	if (expr.list.size() != 3)
+	s_string* name = nullptr;
+	const expression* params;
+	const expression* body;
+	bool ctor;
+
+	if (expr.list.size() == 3)
+	{
+		params = &expr.list[1];
+		body = &expr.list[2];
+		ctor = false;
+	}
+	else if (expr.list.size() == 4)
+	{
+		if (expr.list[1].type != expr_type::atom)
+			throw invalid_keyword_list();
+		name = expr.list[1].value;
+		params = &expr.list[2];
+		body = &expr.list[3];
+		ctor = true;
+	}
+	else
+	{
 		throw invalid_keyword_list();
-	if (expr.list[1].type != expr_type::list)
+	}
+
+	if (params->type != expr_type::list)
 		throw invalid_keyword_list();
 
 	gc_vector<s_string*> par;
-	for (const auto& p : expr.list[1].list)
+	bool is_variadic = false;
+	for (const auto& p : params->list)
 	{
+		if (is_variadic)
+			throw invalid_keyword_list();
+
 		if (p.type != expr_type::atom)
 			throw invalid_keyword_list();
-		if (is_keyword(p.value->ptr))
+
+		if (strcmp(p.value->ptr, "...") == 0)
+		{
+			is_variadic = true;
+			continue;
+		}
+		else if (is_keyword(p.value->ptr))
+		{
 			throw invalid_atom_error();
+		}
 
 		par.emplace_back(p.value);
 	}
 
-	return variable::object(create_function(par, expr.list[2])->obj());
+	s_function* fn = create_function(par, *body, is_variadic);
+	if (ctor)
+	{
+		s_object* prototype = create_object();
+		prototype->name = name;
+		fn->obj()->vars[str_prototype] = prototype->var();
+
+		auto pit = find_local(name);
+		if (pit)
+		{
+			(*pit)->second = fn->var();
+		}
+		else
+		{
+			object_map* mp;
+
+			if (stackframe.empty())
+				mp = &global_object->vars;
+			else
+				mp = &stackframe.front().blocks.front();
+
+			mp->insert({ name, fn->var() });
+		}
+
+	}
+
+	return variable::object(fn->obj());
 }
 
 variable eval_expr_keyword_new(const expression& expr, eval_context& context)
@@ -1237,6 +1633,17 @@ variable eval_expr_keyword_new(const expression& expr, eval_context& context)
 	call_function(ctor, variable::object(obj), arguments);
 
 	return variable::object(obj);
+}
+
+variable eval_expr_keyword_array(const expression & expr, eval_context & context)
+{
+	s_array* ret = create_array();
+	for (auto it = expr.list.begin() + 1; it != expr.list.end(); ++it)
+	{
+		ret->vector.push_back(eval_expr(*it));
+	}
+
+	return variable::object(ret->obj());
 }
 
 variable eval_expr_keyword_getf(const expression& expr, eval_context& context)
@@ -1393,6 +1800,80 @@ variable eval_expr_keyword_setl(const expression& expr, eval_context& context)
 	return val;
 }
 
+variable eval_expr_keyword_geti(const expression & expr, eval_context & context)
+{
+	if (expr.list.size() == 3)
+		throw invalid_keyword_list();
+
+	s_object* obj;
+	s_string* var_name;
+
+	variable tmp = eval_expr(expr.list[1]);
+	if (tmp.type != var_type::object)
+		throw not_object_error();
+	if (tmp.v_object == nullptr)
+		throw null_reference_error();
+	obj = tmp.v_object;
+
+	tmp = eval_expr(expr.list[2]);
+	if (tmp.type != var_type::object)
+		throw not_string_error();
+	if (tmp.v_object == nullptr)
+		throw not_string_error();
+	if (tmp.v_object->type != object_type::string)
+		throw not_string_error();
+	var_name = (s_string*)tmp.v_object;
+
+	auto pit = find_member(obj, var_name);
+	if (pit)
+	{
+		return (*pit)->second;
+	}
+	else
+	{
+		return variable::undefined();
+	}
+}
+
+variable eval_expr_keyword_seti(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() == 4)
+		throw invalid_keyword_list();
+
+	s_object* obj;
+	s_string* var_name;
+
+	variable tmp = eval_expr(expr.list[1]);
+	if (tmp.type != var_type::object)
+		throw not_object_error();
+	if (tmp.v_object == nullptr)
+		throw null_reference_error();
+	obj = tmp.v_object;
+
+	tmp = eval_expr(expr.list[2]);
+	if (tmp.type != var_type::object)
+		throw not_string_error();
+	if (tmp.v_object == nullptr)
+		throw not_string_error();
+	if (tmp.v_object->type != object_type::string)
+		throw not_string_error();
+	var_name = (s_string*)tmp.v_object;
+
+	variable val = eval_expr(expr.list[3]);
+
+	auto pit = find_member(obj, var_name);
+	if (pit)
+	{
+		(*pit)->second = val;
+	}
+	else
+	{
+		obj->vars[var_name] = val;
+	}
+
+	return val;
+}
+
 variable eval_expr_keyword_do(const expression& expr, eval_context& context)
 {
 	if (expr.list.size() <= 1)
@@ -1431,7 +1912,7 @@ variable eval_expr_keyword_while(const expression& expr, eval_context& context)
 	if (expr.list.size() != 3)
 		throw invalid_keyword_list();
 
-	variable ret;
+	variable ret = variable::undefined();
 
 	while (to_conditional(eval_expr(expr.list[1])))
 	{
@@ -1443,20 +1924,327 @@ variable eval_expr_keyword_while(const expression& expr, eval_context& context)
 	return ret;
 }
 
+variable eval_expr_keyword_plus_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() < 2)
+		throw invalid_keyword_list();
+
+	double ret = 0;
+	for (auto it = expr.list.begin() + 1; it != expr.list.end(); ++it)
+	{
+		variable v = eval_expr(*it);
+		if (v.type != var_type::number)
+			throw not_number_error();
+		ret += v.v_number;
+	}
+
+	return variable::number(ret);
+}
+
+variable eval_expr_keyword_minus_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() == 2)
+	{
+		variable v = eval_expr(expr.list[1]);
+		if (v.type != var_type::number)
+			throw not_number_error();
+
+		return variable::number(-v.v_number);
+	}
+	else if (expr.list.size() == 3)
+	{
+		variable v1 = eval_expr(expr.list[1]);
+		if (v1.type != var_type::number)
+			throw not_number_error();
+
+		variable v2 = eval_expr(expr.list[2]);
+		if (v2.type != var_type::number)
+			throw not_number_error();
+
+		return variable::number(v1.v_number - v2.v_number);
+	}
+	else
+	{
+		throw invalid_keyword_list();
+	}
+}
+
+variable eval_expr_keyword_multiply_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() < 2)
+		throw invalid_keyword_list();
+
+	double ret = 1;
+	for (auto it = expr.list.begin() + 1; it != expr.list.end(); ++it)
+	{
+		variable v = eval_expr(*it);
+		if (v.type != var_type::number)
+			throw not_number_error();
+		ret *= v.v_number;
+	}
+
+	return variable::number(ret);
+}
+
+variable eval_expr_keyword_division_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	return variable::number(v1.v_number / v2.v_number);
+}
+
+variable eval_expr_keyword_modulo_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	return variable::number(std::fmod(v1.v_number, v2.v_number));
+}
+
+variable eval_expr_keyword_idiv(const expression & expr, eval_context & context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	std::int64_t ret = to_integer(v1.v_number) / to_integer(v2.v_number);
+	return variable::number(static_cast<double>(ret));
+}
+
+variable eval_expr_keyword_imod(const expression & expr, eval_context & context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	std::int64_t ret = to_integer(v1.v_number) % to_integer(v2.v_number);
+	return variable::number(static_cast<double>(ret));
+}
+
+variable eval_expr_keyword_bitand_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	std::int64_t ret = to_integer(v1.v_number) & to_integer(v2.v_number);
+	return variable::number(static_cast<double>(ret));
+}
+
+variable eval_expr_keyword_bitor_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	std::int64_t ret = to_integer(v1.v_number) | to_integer(v2.v_number);
+	return variable::number(static_cast<double>(ret));
+}
+
+variable eval_expr_keyword_bitxor_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	std::int64_t ret = to_integer(v1.v_number) ^ to_integer(v2.v_number);
+	return variable::number(static_cast<double>(ret));
+}
+
+variable eval_expr_keyword_and(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() < 2)
+		throw invalid_keyword_list();
+
+	for (auto it = expr.list.begin() + 1; it != expr.list.end(); ++it)
+	{
+		variable v = eval_expr(*it);
+		if (!to_conditional(v))
+			return variable::boolean(false);
+	}
+
+	return variable::boolean(true);
+}
+
+variable eval_expr_keyword_or(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() < 2)
+		throw invalid_keyword_list();
+
+	for (auto it = expr.list.begin() + 1; it != expr.list.end(); ++it)
+	{
+		variable v = eval_expr(*it);
+		if (to_conditional(v))
+			return variable::boolean(true);
+	}
+
+	return variable::boolean(false);
+}
+
+variable eval_expr_keyword_not(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 2)
+		throw invalid_keyword_list();
+
+	variable v = eval_expr(expr.list[1]);
+	return variable::boolean(!to_conditional(v));
+}
+
+variable eval_expr_keyword_eq_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	variable v2 = eval_expr(expr.list[2]);
+
+	return variable::boolean(v1 == v2);
+}
+
+variable eval_expr_keyword_ne_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	variable v2 = eval_expr(expr.list[2]);
+
+	return variable::boolean(v1 != v2);
+}
+
+variable eval_expr_keyword_lt_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	return variable::boolean(v1.v_number < v2.v_number);
+}
+
+variable eval_expr_keyword_lte_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	return variable::boolean(v1.v_number <= v2.v_number);
+}
+
+variable eval_expr_keyword_gt_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	return variable::boolean(v1.v_number > v2.v_number);
+}
+
+variable eval_expr_keyword_gte_(const expression& expr, eval_context& context)
+{
+	if (expr.list.size() != 3)
+		throw invalid_keyword_list();
+
+	variable v1 = eval_expr(expr.list[1]);
+	if (v1.type != var_type::number)
+		throw not_number_error();
+
+	variable v2 = eval_expr(expr.list[2]);
+	if (v2.type != var_type::number)
+		throw not_number_error();
+
+	return variable::boolean(v1.v_number >= v2.v_number);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 void print_var(std::ostream& strm, variable var, int indent /* = 0 */)
 {
 	if (var.type == var_type::boolean)
 	{
+		conlib::setcolor_block scb(conlib::color::darkyellow);
 		strm << (var.v_boolean ? "true" : "false");
 	}
 	else if (var.type == var_type::number)
 	{
+		conlib::setcolor_block scb(conlib::color::darkyellow);
 		strm << var.v_number;
 	}
 	else if (var.type == var_type::undefined)
 	{
+		conlib::setcolor_block scb(conlib::color::darkgray);
 		strm << "(undefined)";
 	}
 	else
@@ -1465,6 +2253,7 @@ void print_var(std::ostream& strm, variable var, int indent /* = 0 */)
 
 		if (var.v_object == nullptr)
 		{
+			conlib::setcolor_block scb(conlib::color::darkgray);
 			strm << "(null)";
 		}
 		else if (var.v_object->type == object_type::string)
@@ -1473,10 +2262,12 @@ void print_var(std::ostream& strm, variable var, int indent /* = 0 */)
 		}
 		else if (var.v_object->type == object_type::function)
 		{
-			strm << "(func (";
+			conlib::setcolor_block scb(conlib::color::darkcyan);
+			s_function* fn = (s_function*)var.v_object;
 
+			strm << "(func (";
 			bool first = true;
-			for (const auto& p : ((s_function*)var.v_object)->parameters)
+			for (const auto& p : fn->parameters)
 			{
 				if (!first)
 					strm << ", ";
@@ -1484,8 +2275,47 @@ void print_var(std::ostream& strm, variable var, int indent /* = 0 */)
 
 				strm << p->ptr;
 			}
+			if (!fn->is_variadic)
+			{
+				strm << ") ";
+			}
+			else
+			{
+				if (first)
+					strm << "...) ";
+				else
+					strm << ", ...) ";
+			}
 
-			strm << " ) (...))";
+			auto it = fn->obj()->vars.find(str_prototype);
+			bool ctor = false;
+			if (it != fn->obj()->vars.end())
+			{
+				if (it->second.type == var_type::object && it->second.v_object != nullptr)
+				{
+					conlib::setcolor_block scb(conlib::color::cyan);
+
+					s_object* proto = it->second.v_object;
+					if (proto->name->size != 0)
+					{
+						strm << "<" << proto->name->ptr << ">";
+					}
+					else
+					{
+						strm << "<";
+						conlib::setcolor_block scb(conlib::color::darkgray);
+						strm << "(unknown)";
+						scb.restore();
+						strm << ">";
+					}
+					ctor = true;
+				}
+			}
+			if (!ctor)
+			{
+				strm << "(..)";
+			}
+			strm << ")";
 		}
 		else if (var.v_object->type == object_type::array)
 		{
@@ -1517,6 +2347,32 @@ void print_var(std::ostream& strm, variable var, int indent /* = 0 */)
 		{
 			assert(var.v_object->type == object_type::object);
 
+			if (var.v_object->proto == nullptr)
+			{
+				conlib::setcolor_block scb(conlib::color::darkcyan);
+				strm << "<";
+				conlib::setcolor(conlib::color::darkgray);
+				strm << "(raw)";
+				scb.restore();
+				strm << "> ";
+			}
+			else if (var.v_object->proto != p_Object)
+			{
+				conlib::setcolor_block scb(conlib::color::darkcyan);
+				s_string* name = var.v_object->proto->name;
+				strm << "<";
+				if (name->size != 0)
+				{
+					strm << var.v_object->proto->name->ptr;
+				}
+				else
+				{
+					conlib::setcolor_block scb(conlib::color::darkgray);
+					strm << "(unknown)";
+				}
+				strm << "> ";
+			}
+
 			if (var.v_object->vars.empty())
 			{
 				strm << "{ }";
@@ -1534,7 +2390,7 @@ void print_var(std::ostream& strm, variable var, int indent /* = 0 */)
 						strm << ",\n" << str_indent;
 					first = false;
 
-					strm << pr.first->ptr;
+					strm << pr.first->ptr << ": ";
 					print_var(strm, pr.second, indent + 1);
 				}
 				strm << '\n' << std::string(indent * 2, ' ') << '}';
